@@ -270,8 +270,7 @@ async def process_image(reply_token: str, message_id: str):
         ref = gemini_result.get("ref", "unknown")
         model = gemini_result.get("model", "")
         confidence = gemini_result.get("confidence", "low")
-        
-        if brand == "unknown" or confidence == "low":
+        if brand == "unknown":
             await reply_text(reply_token, "バイヤーが査定中です。\n少々お待ちください。スタッフよりご連絡いたします。")
             return
         
