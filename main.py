@@ -70,22 +70,22 @@ async def download_image(message_id: str) -> bytes:
 # ========== Gemini解析 ==========
 async def analyze_image_with_gemini(image_bytes: bytes) -> dict:
     image_b64 = base64.b64encode(image_bytes).decode()
-    prompt = """この画像に写っている商品を解析してください。
+    prompt = """この画像に写っている商品を査定してください。
+ブランドが有名でなくても、見えている情報から最大限推定してください。
 以下のJSON形式のみで回答してください。他のテキストは一切不要です。
 
 {
-  "brand": "ブランド名",
+  "brand": "ブランド名（不明な場合はUnknownと書かず推定してください）",
   "model": "モデル名",
-  "ref": "型番・Ref番号",
-  "category": "カテゴリ（時計/バッグ/ジュエリー/その他）",
-  "estimated_price_min": 最低価格(数値のみ),
-  "estimated_price_max": 最高価格(数値のみ),
+  "ref": "型番・Ref番号（不明な場合はunknown）",
+  "category": "カテゴリ（時計/バッグ/ジュエリー/カメラ/その他）",
+  "estimated_price_min": 最低価格(数値のみ、円単位で推定),
+  "estimated_price_max": 最高価格(数値のみ、円単位で推定),
   "confidence": "high/medium/low",
-  "reason": "特定できない場合の理由"
+  "reason": "査定の根拠や特徴"
 }
 
-型番が不明な場合はrefを"unknown"にしてください。
-ブランドが特定できない場合はbrandを"unknown"にしてください。"""
+必ず価格を推定してください。ブランドが不明でも商品カテゴリと状態から推定できます。"""
 
     async with httpx.AsyncClient() as client:
         res = await client.post(
@@ -148,6 +148,7 @@ def create_flex_message(gemini_result: dict, auction_result: dict) -> dict:
     category = gemini_result.get("category", "商品")
     est_min = gemini_result.get("estimated_price_min", 0)
     est_max = gemini_result.get("estimated_price_max", 0)
+    reason = gemini_result.get("reason", "")
 
     if auction_result.get("success"):
         avg = auction_result["avg_price"]
@@ -217,6 +218,15 @@ def create_flex_message(gemini_result: dict, auction_result: dict) -> dict:
                         {"type": "text", "text": buy_text, "size": "xxl", "weight": "bold", "color": "#E65100"},
                         {"type": "text", "text": "※状態により変動します", "size": "xs", "color": "#AAAAAA"}
                     ]
+                },
+                {"type": "separator"},
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {"type": "text", "text": "📝 AI査定コメント", "size": "sm", "color": "#888888", "weight": "bold"},
+                        {"type": "text", "text": reason[:100] if reason else "画像から査定しました", "size": "xs", "color": "#555555", "wrap": True}
+                    ]
                 }
             ]
         },
@@ -253,10 +263,9 @@ async def webhook(request: Request):
         message = event["message"]
         
         if message["type"] != "image":
-            await reply_text(reply_token, "📷 査定したい商品の写真を送ってください！\n時計・ブランドバッグ・ジュエリーなど査定します。")
+            await reply_text(reply_token, "📷 査定したい商品の写真を送ってください！\n時計・ブランドバッグ・カメラなど何でも査定します。")
             continue
         
-        # 即座に受付メッセージ（3秒対策）
         asyncio.create_task(process_image(reply_token, message["id"]))
         
     return JSONResponse(content={"status": "ok"})
@@ -267,10 +276,12 @@ async def process_image(reply_token: str, message_id: str):
         gemini_result = await analyze_image_with_gemini(image_bytes)
         
         brand = gemini_result.get("brand", "unknown")
-        ref = gemini_result.get("ref", "unknown")
+        est_min = gemini_result.get("estimated_price_min", 0)
+        est_max = gemini_result.get("estimated_price_max", 0)
         model = gemini_result.get("model", "")
-        confidence = gemini_result.get("confidence", "low")
-        if brand == "unknown":
+        ref = gemini_result.get("ref", "unknown")
+
+        if not est_min and not est_max:
             await reply_text(reply_token, "バイヤーが査定中です。\n少々お待ちください。スタッフよりご連絡いたします。")
             return
         
